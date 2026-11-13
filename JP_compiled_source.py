@@ -6,6 +6,7 @@ from collections.abc import Iterable
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from openmc import IndependentSource
 
 
 def sum_overlapping_spectra(
@@ -171,12 +172,34 @@ def nGen_diamond(N_char = 1, center=(0, 0, 0),
     diff_arr = np.diff(sym_angles)
     yields = np.zeros(len(sym_angles))
 
+    # Form factor takes into consideration the solid angle covered by the specific point source, 
+    # which is proportional to the difference in cos(theta) between the two edges of the source
+    # This is purely due to the fact that point sources which cover smaller areas, like that
+    # about theta = 0, will need to be sampled less often than sources which cover larger areas,
+    # like those about theta = 90 degrees.
+
     for i, sym_angle in enumerate(sym_angles):
         name = f"{sym_angle:.0f}deg" if N_char == 1 else f"{sym_angle:.1f}deg"
-        yields[i] = sym_spectra[name]['average_flux'].sum()
+        if i == 0:
+            form_factor = np.cos(np.deg2rad(sym_angle)) - np.cos(np.deg2rad(sym_angle + diff_arr[i]/2))
+        elif i == len(sym_angles) - 1:
+            form_factor = np.cos(np.deg2rad(sym_angle - diff_arr[i-1]/2)) - np.cos(np.deg2rad(sym_angle + diff_arr[i-1]/2))
+        else:
+            form_factor = np.cos(np.deg2rad(sym_angle - diff_arr[i-1]/2)) - np.cos(np.deg2rad(sym_angle + diff_arr[i]/2))
+        print(f"i: {i}, angle: {sym_angle}, form_factor: {form_factor:.4f}")
+        yields[i] = np.sum(sym_spectra[name]['average_flux']) * form_factor
 
     yields /= np.sum(yields) # Normalize source strengths to 1
 
+    if Show_plots:
+        plt.figure(figsize=(12, 8))
+        plt.plot(sym_angles, yields, marker='o')
+        plt.xlabel("Angle (degrees)")
+        plt.ylabel("Normalized Source Strength")
+        plt.title(f"Normalized Symmetric Source Strength vs Angle Using Characterization #{N_char}")
+        plt.grid()
+        plt.show()
+    
     # azimuthal values
     phi = openmc.stats.Uniform(a=0, b=2 * np.pi)
     
@@ -193,24 +216,38 @@ def nGen_diamond(N_char = 1, center=(0, 0, 0),
             # Go halfway to the previous and next angle
             mu = openmc.stats.Uniform(a=np.cos(np.deg2rad(angle-diff_arr[i-1]/2)), 
                                       b=np.cos(np.deg2rad(angle+diff_arr[i]/2)))  
-        #print(f"i: {i}, angle: {angle}, mu: {mu.a:.4f} to {mu.b:.4f}")
+      
+
+        strength = yields[i]
+
+        #print(f"i: {i}, strength: {strength:.4f}, angle: {angle}, mu: {mu.a:.4f} to {mu.b:.4f}")
+
+
+        # plt.figure(figsize=(12, 8))
+        # plt.title(f"Probability Distribution for Angle: {angle:.0f} degrees")
+        # plt.plot(sym_spectra[name]['energies'], sym_spectra[name]['average_flux']/np.sum(sym_spectra[name]['average_flux']), label=f"Angle: {angle:.0f} degrees, Strength: {strength:.4f}")
+        # plt.xlabel("Energy (MeV)")
+        # plt.ylabel("Normalized Average Flux (Arb. Units)")
+        # plt.title(f"Energy Spectrum for Angle: {angle:.0f} degrees")
+        # plt.grid()
+        # plt.legend()
 
         space = openmc.stats.Point(center)
         angle = openmc.stats.PolarAzimuthal(mu=mu, phi=phi, reference_uvw=reference_uvw)
         energy = openmc.stats.Tabular(
-            sym_spectra[name]['energies'], sym_spectra[name]['average_flux'],
+            sym_spectra[name]['energies']*1e6, sym_spectra[name]['average_flux']/np.sum(sym_spectra[name]['average_flux']),
               interpolation="linear-linear"
         )
-        strength = yields[i]
+        
         my_source = openmc.IndependentSource(
             space=space,
             angle=angle,
             energy=energy,
             strength=strength,
-            particle="neutron",
+            particle="neutron"
         )
         all_sources.append(my_source)
+    #plt.show()
     return all_sources
-
 
 #source = nGen_diamond(N_char=1, center=(0, 0, 0), reference_uvw=(0, 0, 1), Show_plots=True)
